@@ -4,6 +4,7 @@ from gymnasium import spaces
 import numpy as np
 import random
 import cv2
+import math
 
 
 class CarlaEnv(gym.Env):
@@ -11,23 +12,28 @@ class CarlaEnv(gym.Env):
     def __init__(self):
         super(CarlaEnv, self).__init__()
 
-        # =========================
-        # 1️⃣ Connect to CARLA
-        # =========================
+        # Connect to CARLA
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
 
         self.world = self.client.get_world()
         self.blueprint_library = self.world.get_blueprint_library()
 
-        # Destination variables
+        # Episode variables
         self.destination = None
         self.prev_distance = None
-        self.success_threshold = 5.0  # meters
+        self.success_threshold = 5.0
 
-        # =========================
-        # 2️⃣ Synchronous Mode
-        # =========================
+        self.collision_hist = []
+        self.lane_invasion = False
+        self.traffic_violation = False
+        self.pedestrian_collision = False
+        self.image = None
+
+        self.max_steps = 1000
+        self.step_count = 0
+
+        # Synchronous mode
         settings = self.world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05
@@ -36,18 +42,14 @@ class CarlaEnv(gym.Env):
         self.traffic_manager = self.client.get_trafficmanager()
         self.traffic_manager.set_synchronous_mode(True)
 
-        # =========================
-        # 3️⃣ Action Space
-        # =========================
+        # Action space
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, 0.0]),
             high=np.array([1.0, 1.0, 1.0]),
             dtype=np.float32
         )
 
-        # =========================
-        # 4️⃣ Observation Space
-        # =========================
+        # Observation space
         self.observation_space = spaces.Box(
             low=0,
             high=255,
@@ -56,15 +58,9 @@ class CarlaEnv(gym.Env):
         )
 
         self.actor_list = []
-        self.collision_hist = []
-        self.lane_invasion = False
-        self.image = None
-
-        self.max_steps = 1000
-        self.step_count = 0
 
     # =====================================================
-    # RESET FUNCTION
+    # RESET
     # =====================================================
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -74,41 +70,36 @@ class CarlaEnv(gym.Env):
         self.step_count = 0
         self.collision_hist = []
         self.lane_invasion = False
+        self.traffic_violation = False
+        self.pedestrian_collision = False
         self.image = None
-
-        # Random weather
-        weather = carla.WeatherParameters(
-            cloudiness=random.uniform(0, 100),
-            precipitation=random.uniform(0, 50),
-            sun_altitude_angle=random.uniform(10, 90)
-        )
-        self.world.set_weather(weather)
-
-        # Spawn vehicle
-        vehicle_bp = random.choice(
-            self.blueprint_library.filter("vehicle.tesla.model3")
-        )
 
         spawn_points = self.world.get_map().get_spawn_points()
         spawn_point = random.choice(spawn_points)
 
+        vehicle_bp = random.choice(
+            self.blueprint_library.filter("vehicle.tesla.model3")
+        )
+
         self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
         self.actor_list.append(self.vehicle)
 
-        # =========================
-        # Select Safe Destination
-        # =========================
+        # Destination selection
         destination_point = random.choice(spawn_points)
-
-        while destination_point.location.distance(spawn_point.location) < 20:
+        attempts = 0
+        while (
+            destination_point.location.distance(spawn_point.location) < 20
+            and attempts < 50
+        ):
             destination_point = random.choice(spawn_points)
+            attempts += 1
 
         self.destination = destination_point.location
         self.prev_distance = self._get_distance_to_destination()
 
-        # =========================
-        # Attach Camera
-        # =========================
+        # ===============================
+        # CAMERA SENSOR
+        # ===============================
         camera_bp = self.blueprint_library.find("sensor.camera.rgb")
         camera_bp.set_attribute("image_size_x", "84")
         camera_bp.set_attribute("image_size_y", "84")
@@ -124,12 +115,11 @@ class CarlaEnv(gym.Env):
             attach_to=self.vehicle
         )
         self.actor_list.append(self.camera)
-
         self.camera.listen(lambda image: self._process_image(image))
 
-        # =========================
-        # Collision Sensor
-        # =========================
+        # ===============================
+        # COLLISION SENSOR
+        # ===============================
         collision_bp = self.blueprint_library.find("sensor.other.collision")
         self.collision_sensor = self.world.spawn_actor(
             collision_bp,
@@ -138,12 +128,12 @@ class CarlaEnv(gym.Env):
         )
         self.actor_list.append(self.collision_sensor)
         self.collision_sensor.listen(
-            lambda event: self.collision_hist.append(event)
+            lambda event: self._collision_event(event)
         )
 
-        # =========================
-        # Lane Invasion Sensor
-        # =========================
+        # ===============================
+        # LANE SENSOR
+        # ===============================
         lane_bp = self.blueprint_library.find("sensor.other.lane_invasion")
         self.lane_sensor = self.world.spawn_actor(
             lane_bp,
@@ -153,17 +143,45 @@ class CarlaEnv(gym.Env):
         self.actor_list.append(self.lane_sensor)
         self.lane_sensor.listen(lambda event: self._lane_event())
 
-        # Spawn Traffic
-        self._spawn_traffic()
+        # ===============================
+        # PEDESTRIAN GENERATION
+        # ===============================
+        num_pedestrians = 10
+        walker_blueprints = self.blueprint_library.filter("walker.pedestrian.*")
+        controller_bp = self.blueprint_library.find("controller.ai.walker")
 
-        # Wait for first frame
+        for _ in range(num_pedestrians):
+            loc = self.world.get_random_location_from_navigation()
+            if loc is None:
+                continue
+
+            walker_transform = carla.Transform(loc)
+            walker_bp = random.choice(walker_blueprints)
+
+            walker = self.world.spawn_actor(walker_bp, walker_transform)
+            self.actor_list.append(walker)
+
+            controller = self.world.spawn_actor(
+                controller_bp,
+                carla.Transform(),
+                walker
+            )
+            self.actor_list.append(controller)
+
+            controller.start()
+            controller.go_to_location(
+                self.world.get_random_location_from_navigation()
+            )
+            controller.set_max_speed(1.4)
+
+        # Wait until first image is received
         while self.image is None:
             self.world.tick()
 
         return self.image, {}
 
     # =====================================================
-    # STEP FUNCTION
+    # STEP
     # =====================================================
     def step(self, action):
         self.step_count += 1
@@ -179,58 +197,83 @@ class CarlaEnv(gym.Env):
         self.vehicle.apply_control(control)
         self.world.tick()
 
+        self._check_traffic_violation()
+
         reward = self._compute_reward()
         done = self._check_done()
 
-        # Reset lane invasion flag
         self.lane_invasion = False
 
         return self.image, reward, done, False, {}
 
     # =====================================================
-    # REWARD FUNCTION
+    # COLLISION EVENT
+    # =====================================================
+    def _collision_event(self, event):
+        other_actor = event.other_actor
+
+        if "walker" in other_actor.type_id:
+            self.pedestrian_collision = True
+        else:
+            self.collision_hist.append(event)
+
+    # =====================================================
+    # TRAFFIC VIOLATION CHECK
+    # =====================================================
+    def _check_traffic_violation(self):
+        if self.vehicle.is_at_traffic_light():
+            traffic_light = self.vehicle.get_traffic_light()
+
+            if traffic_light.get_state() == carla.TrafficLightState.Red:
+                velocity = self.vehicle.get_velocity()
+                speed = math.sqrt(velocity.x**2 + velocity.y**2)
+
+                if speed > 1.0:
+                    self.traffic_violation = True
+
+    # =====================================================
+    # REWARD
     # =====================================================
     def _compute_reward(self):
         reward = 0
 
         velocity = self.vehicle.get_velocity()
-        speed = np.sqrt(velocity.x**2 + velocity.y**2)
-
-        # Encourage forward motion
+        speed = math.sqrt(velocity.x**2 + velocity.y**2)
         reward += 0.5 * speed
 
-        # Distance-based reward
         current_distance = self._get_distance_to_destination()
-        distance_reward = self.prev_distance - current_distance
-        reward += 2.0 * distance_reward
-
+        reward += 2.0 * (self.prev_distance - current_distance)
         self.prev_distance = current_distance
 
-        # Destination reached
-        if current_distance < self.success_threshold:
-            reward += 200
-
-        # Penalties
         if len(self.collision_hist) > 0:
             reward -= 100
+
+        if self.pedestrian_collision:
+            reward -= 300
+
+        if self.traffic_violation:
+            reward -= 150
 
         if self.lane_invasion:
             reward -= 10
 
-        return reward
+        if current_distance < self.success_threshold:
+            reward += 200
 
-    # =====================================================
-    # DISTANCE CALCULATION
-    # =====================================================
-    def _get_distance_to_destination(self):
-        vehicle_location = self.vehicle.get_location()
-        return vehicle_location.distance(self.destination)
+        return reward
 
     # =====================================================
     # DONE CONDITIONS
     # =====================================================
     def _check_done(self):
+
+        if self.pedestrian_collision:
+            return True
+
         if len(self.collision_hist) > 0:
+            return True
+
+        if self.traffic_violation:
             return True
 
         if self.step_count >= self.max_steps:
@@ -242,49 +285,28 @@ class CarlaEnv(gym.Env):
         return False
 
     # =====================================================
-    # IMAGE PROCESSING
+    # HELPERS
     # =====================================================
+    def _get_distance_to_destination(self):
+        return self.vehicle.get_location().distance(self.destination)
     def _process_image(self, image):
         img = np.frombuffer(image.raw_data, dtype=np.uint8)
         img = img.reshape((84, 84, 4))
         img = img[:, :, :3]
-
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray = np.expand_dims(gray, axis=2)
+        self.image = np.expand_dims(gray, axis=2)
 
-        self.image = gray
-
-    # =====================================================
-    # LANE EVENT
-    # =====================================================
     def _lane_event(self):
         self.lane_invasion = True
 
-    # =====================================================
-    # TRAFFIC SPAWN
-    # =====================================================
-    def _spawn_traffic(self):
-        spawn_points = self.world.get_map().get_spawn_points()
-
-        for _ in range(20):
-            vehicle_bp = random.choice(
-                self.blueprint_library.filter("vehicle.*")
-            )
-            spawn_point = random.choice(spawn_points)
-
-            vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
-            if vehicle is not None:
-                vehicle.set_autopilot(True, self.traffic_manager.get_port())
-                self.actor_list.append(vehicle)
-
-    # =====================================================
-    # CLEANUP
-    # =====================================================
     def _cleanup(self):
         for actor in self.actor_list:
             if actor.is_alive:
+                try:
+                    actor.stop()
+                except:
+                    pass
                 actor.destroy()
         self.actor_list = []
-
     def close(self):
         self._cleanup()
