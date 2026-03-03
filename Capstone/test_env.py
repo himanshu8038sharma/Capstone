@@ -1,26 +1,22 @@
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
 from carla_env import CarlaEnv
-import numpy as np
-import time
 
-env = CarlaEnv()
+def test():
 
-obs, _ = env.reset()
+    env = DummyVecEnv([lambda: CarlaEnv()])
+    env = VecTransposeImage(env)
 
-done = False
-total_reward = 0
+    model = PPO.load("ppo_carla_model")
 
-while not done:
-    # Random action for testing
-    action = env.action_space.sample()
+    obs = env.reset()
 
-    obs, reward, done, truncated, info = env.step(action)
+    while True:
+        action, _ = model.predict(obs)
+        obs, reward, done, info = env.step(action)
 
-    total_reward += reward
-    print(f"Step Reward: {reward:.2f}")
+        if done:
+            obs = env.reset()
 
-    time.sleep(0.05)
-
-print("Episode finished")
-print("Total Reward:", total_reward)
-
-env.close()
+if __name__ == "__main__":
+    test()
