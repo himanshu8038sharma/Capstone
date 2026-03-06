@@ -57,10 +57,6 @@ class CarlaEnv(gym.Env):
         vehicle_bp = random.choice(
             self.blueprint_library.filter("vehicle.tesla.model3")
         )
-        #spawn_points = self.world.get_map().get_spawn_points()
-        #spawn_point = random.choice(spawn_points)
-        #self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
-        ###
         spawn_points = self.world.get_map().get_spawn_points()
         random.shuffle(spawn_points)
         self.vehicle = None
@@ -70,7 +66,6 @@ class CarlaEnv(gym.Env):
                 break
         if self.vehicle is None:
             raise RuntimeError("Failed to spawn ego vehicle after trying all spawn points.")
-        ###
         self.actor_list.append(self.vehicle)
         destination_point = random.choice(spawn_points)
         attempts=0
