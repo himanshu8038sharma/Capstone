@@ -10,8 +10,11 @@ class CarlaEnv(gym.Env):
     def __init__(self):
         super(CarlaEnv, self).__init__()
         self.client = carla.Client("localhost", 2000)
-        self.client.set_timeout(10.0)
-        self.world = self.client.get_world()
+        self.client.set_timeout(30.0)
+        town_train=["Town01_Opt","Town02","Town03","Town04","Town05","Town02_Opt","Town03_Opt","Town04_Opt","Town05_Opt"]
+        selected_town = random.choice(town_train)
+        town_test="Town01"
+        self.world = self.client.load_world(selected_town)
         self.blueprint_library = self.world.get_blueprint_library()
         self.destination = None
         self.prev_distance = None
@@ -25,7 +28,7 @@ class CarlaEnv(gym.Env):
         self.traffic_manager.set_synchronous_mode(True)
         self.action_space = spaces.Box(
             low=np.array([-0.5, 0.1, 0.0],dtype=np.float32),
-            high=np.array([0.5, 1.0, 0.0],dtype=np.float32),
+            high=np.array([0.5, 0.7, 0.4],dtype=np.float32),
             dtype=np.float32
         )
         self.observation_space = spaces.Box(
