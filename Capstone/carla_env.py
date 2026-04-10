@@ -11,9 +11,9 @@ class CarlaEnv(gym.Env):
         super(CarlaEnv, self).__init__()
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(30.0)
-        town_train=["Town01_Opt","Town02","Town03","Town04","Town05","Town02_Opt","Town03_Opt","Town04_Opt","Town05_Opt"]
+        town_train=["Town01_Opt","Town02_Opt","Town03_Opt","Town04_Opt","Town05_Opt"]
         selected_town = random.choice(town_train)
-        town_test="Town01"
+        town_test="Town10HD_Opt"
         self.world = self.client.load_world(selected_town)
         self.blueprint_library = self.world.get_blueprint_library()
         self.destination = None
@@ -27,8 +27,8 @@ class CarlaEnv(gym.Env):
         self.traffic_manager = self.client.get_trafficmanager()
         self.traffic_manager.set_synchronous_mode(True)
         self.action_space = spaces.Box(
-            low=np.array([-0.5, 0.1, 0.0],dtype=np.float32),
-            high=np.array([0.5, 0.7, 0.4],dtype=np.float32),
+            low=np.array([-0.5, 0],dtype=np.float32),
+            high=np.array([0.5, 0.5],dtype=np.float32),
             dtype=np.float32
         )
         self.observation_space = spaces.Box(
@@ -54,7 +54,10 @@ class CarlaEnv(gym.Env):
         weather = carla.WeatherParameters(
             cloudiness=random.uniform(0, 100),
             precipitation=random.uniform(0, 50),
-            sun_altitude_angle=random.uniform(10, 90)
+            sun_altitude_angle=random.uniform(10, 90),
+            fog_density=random.uniform(0, 50),
+            fog_distance=random.uniform(0, 50),
+            wind_intensity=random.uniform(0, 50),
         )
         self.world.set_weather(weather)
         vehicle_bp = random.choice(
@@ -72,9 +75,17 @@ class CarlaEnv(gym.Env):
         self.actor_list.append(self.vehicle)
         destination_point = random.choice(spawn_points)
         attempts=0
-        while destination_point.location.distance(spawn_point.location) < 20 and attempts < 50:
+        #while destination_point.location.distance(spawn_point.location) < 100  and attempts < 50:
+        #    destination_point = random.choice(spawn_points)
+        #    attempts+=1
+        while not (
+                (destination_point.location.x - spawn_point.location.x) > 100 and
+                (destination_point.location.y - spawn_point.location.y) > 50
+        ) and attempts < 50:
             destination_point = random.choice(spawn_points)
-            attempts+=1
+            attempts += 1
+        if attempts >= 50:
+            destination_point = random.choice(spawn_points)
         self.destination = destination_point.location
         self.prev_distance = self._get_distance_to_destination()
         camera_bp = self.blueprint_library.find("sensor.camera.rgb")
@@ -115,18 +126,14 @@ class CarlaEnv(gym.Env):
         return self.image, {}
     def step(self, action):
         self.step_count += 1
-        steer, throttle, brake = action
-        if throttle > brake:
-            brake = 0.0
-        else:
-            throttle = 0.0
+        steer, throttle = action
         control = carla.VehicleControl(
             steer=float(steer),
             throttle=float(throttle),
-            brake=float(brake),
             hand_brake = False,
-            reverse=False
+            reverse=False,
         )
+       # print("Steer",steer,"Throttle",throttle)
         self.vehicle.apply_control(control)
         self.world.tick()
         self._check_traffic_violation()
@@ -139,10 +146,13 @@ class CarlaEnv(gym.Env):
         reward = 0
         velocity = self.vehicle.get_velocity()
         speed = np.sqrt(velocity.x**2 + velocity.y**2)
-        reward += 0.5 * speed
+       # print("Speed",speed)
+        reward += 0.1 * speed
+        yaw_rate= abs(self.vehicle.get_angular_velocity().z)
+        reward -= 0.2*yaw_rate
         current_distance = self._get_distance_to_destination()
         distance_reward = self.prev_distance - current_distance
-        reward += 2.0 * distance_reward
+        reward += 0.1 * distance_reward
         self.prev_distance = current_distance
         waypoint = self.world.get_map().get_waypoint(
             self.vehicle.get_location(),
@@ -152,8 +162,10 @@ class CarlaEnv(gym.Env):
             waypoint.transform.location
         )
         reward -= 2.0 * lane_distance
+        if speed<0.1:
+            reward -= 100
         if waypoint.lane_type != carla.LaneType.Driving:
-            reward -= 20
+            reward -= 100
         if self.vehicle.is_at_traffic_light():
             traffic_light = self.vehicle.get_traffic_light()
             if traffic_light.get_state() == carla.TrafficLightState.Red:
@@ -166,7 +178,7 @@ class CarlaEnv(gym.Env):
             reward -= 10
         if self.traffic_violation:
             reward-=150
-        reward/=100
+       # print("Reward",reward)
         return reward
     def _get_distance_to_destination(self):
         vehicle_location = self.vehicle.get_location()
@@ -179,6 +191,12 @@ class CarlaEnv(gym.Env):
         if self.step_count >= self.max_steps:
             return True
         if self._get_distance_to_destination() < self.success_threshold:
+            return True
+        waypoint = self.world.get_map().get_waypoint(
+            self.vehicle.get_location(),
+            project_to_road=True
+        )
+        if waypoint.lane_type != carla.LaneType.Driving:
             return True
         return False
     def update_spectator(self):
