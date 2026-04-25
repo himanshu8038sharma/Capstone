@@ -5,7 +5,6 @@ import numpy as np
 import random
 import cv2
 import math
-
 class CarlaEnv(gym.Env):
     def __init__(self):
         super(CarlaEnv, self).__init__()
@@ -75,9 +74,6 @@ class CarlaEnv(gym.Env):
         self.actor_list.append(self.vehicle)
         destination_point = random.choice(spawn_points)
         attempts=0
-        #while destination_point.location.distance(spawn_point.location) < 100  and attempts < 50:
-        #    destination_point = random.choice(spawn_points)
-        #    attempts+=1
         while not (
                 (destination_point.location.x - spawn_point.location.x) > 100 and
                 (destination_point.location.y - spawn_point.location.y) > 50
@@ -133,7 +129,6 @@ class CarlaEnv(gym.Env):
             hand_brake = False,
             reverse=False,
         )
-       # print("Steer",steer,"Throttle",throttle)
         self.vehicle.apply_control(control)
         self.world.tick()
         self._check_traffic_violation()
@@ -146,7 +141,6 @@ class CarlaEnv(gym.Env):
         reward = 0
         velocity = self.vehicle.get_velocity()
         speed = np.sqrt(velocity.x**2 + velocity.y**2)
-       # print("Speed",speed)
         reward += 0.1 * speed
         yaw_rate= abs(self.vehicle.get_angular_velocity().z)
         reward -= 0.2*yaw_rate
@@ -161,24 +155,15 @@ class CarlaEnv(gym.Env):
         lane_distance = self.vehicle.get_location().distance(
             waypoint.transform.location
         )
-        reward -= 2.0 * lane_distance
+        reward -= 1.0 * lane_distance
         if speed<0.1:
-            reward -= 100
-        if waypoint.lane_type != carla.LaneType.Driving:
-            reward -= 100
-        if self.vehicle.is_at_traffic_light():
-            traffic_light = self.vehicle.get_traffic_light()
-            if traffic_light.get_state() == carla.TrafficLightState.Red:
-                reward -= 15
-        if current_distance < self.success_threshold:
-            reward += 200
-        if len(self.collision_hist) > 0:
-            reward -= 100
-        if self.lane_invasion:
             reward -= 10
-        if self.traffic_violation:
-            reward-=150
-       # print("Reward",reward)
+        if current_distance < self.success_threshold:
+            reward += 20
+        if len(self.collision_hist) > 0:
+            reward -= 10
+        if self.lane_invasion:
+            reward -= 5
         return reward
     def _get_distance_to_destination(self):
         vehicle_location = self.vehicle.get_location()
@@ -194,9 +179,9 @@ class CarlaEnv(gym.Env):
             return True
         waypoint = self.world.get_map().get_waypoint(
             self.vehicle.get_location(),
-            project_to_road=True
+            project_to_road=False
         )
-        if waypoint.lane_type != carla.LaneType.Driving:
+        if waypoint is None or waypoint.lane_type != carla.LaneType.Driving:
             return True
         return False
     def update_spectator(self):
