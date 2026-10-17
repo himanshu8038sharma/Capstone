@@ -5,7 +5,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import TrainFreq, TrainFrequencyUnit
 from carla_env import CarlaEnv
 def train():
-    os.makedirs("logs_sac1", exist_ok=True)
+    os.makedirs("logs_sac", exist_ok=True)
     HP = {
         "learning_rate": 3e-4,
         "batch_size": 1024,

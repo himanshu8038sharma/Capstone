@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# IDEs
+.idea/
+.vscode/
+
+# Training artifacts (large / reproducible)
+*.zip
+logs*/
+*_tensorboard*/
+runs/
+*.pt
+*.pth
+*.pkl
+
+# Generated plots (keep curated ones in docs/)
+/RL_CARLA_Comparison.png
+
+# OS
+.DS_Store
+Thumbs.db

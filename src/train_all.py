@@ -9,6 +9,7 @@ TOTAL_TIMESTEPS = 1000000
 
 
 def make_env(log_dir):
+    os.makedirs(log_dir, exist_ok=True)
     env = DummyVecEnv([lambda: Monitor(CarlaEnv(), log_dir)])
     env = VecTransposeImage(env)
     return env

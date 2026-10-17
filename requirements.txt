@@ -1,0 +1,15 @@
+# CARLA's Python API must match your CARLA *server* version, e.g.:
+#   pip install carla==0.9.15
+# (or install the .whl shipped inside the CARLA package: PythonAPI/carla/dist/)
+carla
+
+# Install PyTorch separately for your CUDA version: https://pytorch.org/get-started/locally/
+torch
+
+gymnasium>=0.29
+stable-baselines3>=2.0
+numpy
+opencv-python
+pandas
+matplotlib
+tensorboard
